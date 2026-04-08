@@ -12,6 +12,7 @@ export interface Product {
   hoverImage: string;
   images?: string[];
   colors: string[];
+  colorImageMap?: Record<string, number>;
   sizes?: string[];
   category: string;
   isSale?: boolean;

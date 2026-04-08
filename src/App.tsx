@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect, createContext, useContext } from 'react';
+import React, { useState, useEffect, createContext, useContext, useRef } from 'react';
 import { 
   ShoppingBag, 
   ShoppingCart, 
@@ -276,6 +276,7 @@ interface FirebaseContextType {
   user: any | null;
   role: string | null;
   loading: boolean;
+  products: Product[];
   cart: CartItem[];
   addToCart: (product: Product, quantity: number, color: string, size?: string) => Promise<void>;
   removeFromCart: (itemId: string) => Promise<void>;
@@ -432,7 +433,7 @@ const Navbar = ({ onNavigate, currentView, openAuth }: { onNavigate: (view: 'lis
 };
 
 const CartDropdown = ({ onClose, onCheckout }: { onClose: () => void, onCheckout: () => void }) => {
-  const { cart, removeFromCart, updateCartQuantity } = useFirebase();
+  const { cart, products, removeFromCart, updateCartQuantity } = useFirebase();
 
   return (
     <motion.div 
@@ -453,7 +454,7 @@ const CartDropdown = ({ onClose, onCheckout }: { onClose: () => void, onCheckout
           </div>
         ) : (
           cart.map(item => {
-            const product = PRODUCTS.find(p => p.id === item.productId);
+            const product = products.find(p => p.id === item.productId) || PRODUCTS.find(p => p.id === item.productId);
             if (!product) return null;
             return (
               <div key={item.id} className="flex gap-4">
@@ -676,14 +677,6 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onClick }) => {
           <div className="absolute top-4 left-4 bg-secondary text-white text-[10px] px-2 py-1 rounded font-bold">SALE</div>
         )}
 
-        {role === 'admin' && user?.email === 'quyquyquyet1999@gmail.com' && (
-          <div className="absolute top-4 right-4 z-10">
-            <div className="bg-brand text-white p-2 rounded-xl shadow-lg hover:scale-110 transition-all">
-              <Edit size={16} />
-            </div>
-          </div>
-        )}
-
         <div className={`absolute bottom-4 left-4 right-4 transition-all duration-300 ${isHovered ? 'translate-y-0 opacity-100' : 'translate-y-4 opacity-0'}`}>
           <button className="w-full h-12 bg-white text-on-surface font-bold rounded-xl shadow-xl hover:bg-primary hover:text-white transition-colors">
             Xem nhanh
@@ -722,23 +715,14 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onClick }) => {
 // --- Views ---
 
 const ProductListView = ({ onProductClick }: { onProductClick: (p: Product) => void }) => {
-  const [products, setProducts] = useState<Product[]>([]);
+  const { products, loading: firebaseLoading } = useFirebase();
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const q = query(collection(db, 'products'), where('status', '==', 'active'));
-    const unsubscribe = onSnapshot(q, (snapshot) => {
-      const prods = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
-      setProducts(prods.length > 0 ? prods : PRODUCTS);
+    if (!firebaseLoading) {
       setLoading(false);
-    }, (error) => {
-      console.error('Lỗi lấy sản phẩm:', error);
-      setProducts(PRODUCTS);
-      setLoading(false);
-    });
-
-    return () => unsubscribe();
-  }, []);
+    }
+  }, [firebaseLoading]);
 
   return (
     <div className="max-w-7xl mx-auto px-8 pt-32 flex gap-12">
@@ -837,7 +821,7 @@ const ProductListView = ({ onProductClick }: { onProductClick: (p: Product) => v
 };
 
 const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product, onBack: () => void, onCheckout: () => void }) => {
-  const { user, addToCart, addToast } = useFirebase();
+  const { user, products, addToCart, addToast } = useFirebase();
   const [selectedImage, setSelectedImage] = useState(product.images?.[0] || product.image);
   const [zoomPos, setZoomPos] = useState({ x: 0, y: 0 });
   const [isZooming, setIsZooming] = useState(false);
@@ -849,6 +833,8 @@ const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product, 
   const [newReview, setNewReview] = useState({ rating: 5, comment: '' });
   const [isSubmittingReview, setIsSubmittingReview] = useState(false);
   const [reviewPhoto, setReviewPhoto] = useState<string | null>(null);
+  const carouselRef = useRef<HTMLDivElement>(null);
+  const thumbnailsRef = useRef<HTMLDivElement>(null);
 
   const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
     const { left, top, width, height } = e.currentTarget.getBoundingClientRect();
@@ -858,6 +844,41 @@ const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product, 
   };
 
   const productImages = product.images && product.images.length > 0 ? product.images : [product.image, product.hoverImage];
+
+  const handleColorSelect = (color: string) => {
+    setSelectedColor(color);
+    
+    // Tìm index ảnh tương ứng
+    const imageIndex = product.colorImageMap?.[color];
+    if (imageIndex !== undefined) {
+      const targetIndex = imageIndex - 1; // Chuyển từ 1-based sang 0-based
+      
+      // Cập nhật ảnh chính trên desktop
+      if (productImages[targetIndex]) {
+        setSelectedImage(productImages[targetIndex]);
+      }
+      
+      // Cuộn carousel trên mobile
+      if (carouselRef.current) {
+        const width = carouselRef.current.offsetWidth;
+        carouselRef.current.scrollTo({
+          left: targetIndex * width,
+          behavior: 'smooth'
+        });
+      }
+
+      // Cuộn danh sách ảnh nhỏ trên desktop
+      if (thumbnailsRef.current) {
+        const thumbElement = thumbnailsRef.current.children[targetIndex] as HTMLElement;
+        if (thumbElement) {
+          thumbnailsRef.current.scrollTo({
+            top: thumbElement.offsetTop - thumbnailsRef.current.offsetTop,
+            behavior: 'smooth'
+          });
+        }
+      }
+    }
+  };
 
   useEffect(() => {
     setSelectedImage(product.images?.[0] || product.image);
@@ -934,95 +955,161 @@ const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product, 
       </nav>
 
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-16">
-        {/* Left: Gallery */}
-        <div className="lg:col-span-7 flex flex-col md:flex-row gap-6">
-          {/* Desktop Thumbnails */}
-          <div className="hidden md:flex flex-col gap-4 w-24 shrink-0">
-            {productImages.map((img, i) => (
-              <button 
-                key={i} 
-                onClick={() => setSelectedImage(img || PLACEHOLDER_IMAGE)}
-                className={`rounded-xl overflow-hidden aspect-square p-1 bg-surface-container-low transition-all border-2 ${selectedImage === (img || PLACEHOLDER_IMAGE) ? 'border-primary shadow-md' : 'border-transparent hover:border-outline-variant'}`}
+        {/* Left: Gallery & Highlights */}
+        <div className="lg:col-span-7 flex flex-col gap-12">
+          <div className="flex flex-col md:flex-row gap-6">
+            {/* Desktop Thumbnails */}
+            <div 
+              ref={thumbnailsRef}
+              className="hidden md:flex flex-col gap-4 w-24 shrink-0 max-h-[600px] overflow-y-auto custom-scrollbar pr-2 scroll-smooth"
+            >
+              {productImages.map((img, i) => (
+                <button 
+                  key={i} 
+                  onClick={() => setSelectedImage(img || PLACEHOLDER_IMAGE)}
+                  onMouseEnter={() => setSelectedImage(img || PLACEHOLDER_IMAGE)}
+                  className={`rounded-xl overflow-hidden aspect-square p-1 bg-surface-container-low transition-all border-2 ${selectedImage === (img || PLACEHOLDER_IMAGE) ? 'border-[#00A896] shadow-md scale-105' : 'border-transparent hover:border-[#00A896]/50'}`}
+                  style={{ aspectRatio: '1/1', minHeight: '88px' }}
+                >
+                  <img 
+                    src={img || PLACEHOLDER_IMAGE} 
+                    alt="" 
+                    className="w-full h-full object-cover rounded-lg" 
+                    referrerPolicy="no-referrer" 
+                  />
+                </button>
+              ))}
+            </div>
+
+            {/* Main Image / Mobile Carousel */}
+            <div className="flex-1 relative">
+              {/* Desktop Main Image with Zoom */}
+              <div 
+                className="hidden md:block relative rounded-[40px] overflow-hidden bg-surface-container-low aspect-square group cursor-zoom-in border border-zinc-100"
                 style={{ aspectRatio: '1/1' }}
+                onMouseMove={handleMouseMove}
+                onMouseEnter={() => setIsZooming(true)}
+                onMouseLeave={() => setIsZooming(false)}
               >
                 <img 
-                  src={img || PLACEHOLDER_IMAGE} 
-                  alt="" 
-                  className="w-full h-full object-cover rounded-lg" 
+                  src={selectedImage || product.image || PLACEHOLDER_IMAGE} 
+                  alt={product.name} 
+                  className={`w-full h-full object-cover transition-transform duration-300 ${isZooming ? 'scale-150' : 'scale-100'}`}
+                  style={{ 
+                    transformOrigin: `${zoomPos.x}% ${zoomPos.y}%`
+                  }}
                   referrerPolicy="no-referrer" 
                 />
-              </button>
-            ))}
-          </div>
+              </div>
 
-          {/* Main Image / Mobile Carousel */}
-          <div className="flex-1 relative">
-            {/* Desktop Main Image with Zoom */}
-            <div 
-              className="hidden md:block relative rounded-[40px] overflow-hidden bg-surface-container-low aspect-square group cursor-zoom-in border border-zinc-100"
-              style={{ aspectRatio: '1/1' }}
-              onMouseMove={handleMouseMove}
-              onMouseEnter={() => setIsZooming(true)}
-              onMouseLeave={() => setIsZooming(false)}
-            >
-              <img 
-                src={selectedImage || product.image || PLACEHOLDER_IMAGE} 
-                alt={product.name} 
-                className={`w-full h-full object-cover transition-transform duration-300 ${isZooming ? 'scale-150' : 'scale-100'}`}
-                style={{ 
-                  transformOrigin: `${zoomPos.x}% ${zoomPos.y}%`
-                }}
-                referrerPolicy="no-referrer" 
-              />
-              
-              {/* Badges */}
-              <div className="absolute top-8 left-8 flex flex-col gap-3 pointer-events-none z-10">
-                <div className="bg-white/95 backdrop-blur-md shadow-lg px-5 py-2.5 rounded-2xl flex items-center gap-3 border border-zinc-100">
-                  <div className="w-2.5 h-2.5 rounded-full bg-[#00A896] animate-pulse" />
-                  <span className="text-[11px] font-black uppercase tracking-[0.15em] text-zinc-800">Chất liệu an toàn</span>
+              {/* Mobile Carousel */}
+              <div className="md:hidden relative">
+                <div 
+                  ref={carouselRef}
+                  className="flex overflow-x-auto snap-x snap-mandatory no-scrollbar rounded-3xl aspect-square"
+                  style={{ aspectRatio: '1/1' }}
+                  onScroll={(e) => {
+                    const scrollLeft = e.currentTarget.scrollLeft;
+                    const width = e.currentTarget.offsetWidth;
+                    setCurrentSlide(Math.round(scrollLeft / width));
+                  }}
+                >
+                  {productImages.map((img, i) => (
+                    <div key={i} className="w-full h-full shrink-0 snap-center">
+                      <img 
+                        src={img || PLACEHOLDER_IMAGE} 
+                        alt="" 
+                        className="w-full h-full object-cover" 
+                        referrerPolicy="no-referrer"
+                      />
+                    </div>
+                  ))}
+                </div>
+                
+                {/* Pagination Dots */}
+                <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-2 z-10">
+                  {productImages.map((_, i) => (
+                    <div 
+                      key={i}
+                      className={`h-1.5 rounded-full transition-all duration-300 ${currentSlide === i ? 'w-6 bg-[#00A896]' : 'w-1.5 bg-white/50'}`}
+                    />
+                  ))}
                 </div>
               </div>
             </div>
+          </div>
 
-            {/* Mobile Carousel */}
-            <div className="md:hidden relative">
-              <div 
-                className="flex overflow-x-auto snap-x snap-mandatory no-scrollbar rounded-3xl aspect-square"
-                style={{ aspectRatio: '1/1' }}
-                onScroll={(e) => {
-                  const scrollLeft = e.currentTarget.scrollLeft;
-                  const width = e.currentTarget.offsetWidth;
-                  setCurrentSlide(Math.round(scrollLeft / width));
-                }}
-              >
-                {productImages.map((img, i) => (
-                  <div key={i} className="w-full h-full shrink-0 snap-center">
-                    <img 
-                      src={img || PLACEHOLDER_IMAGE} 
-                      alt="" 
-                      className="w-full h-full object-cover" 
-                      referrerPolicy="no-referrer"
-                    />
-                  </div>
-                ))}
-              </div>
-              
-              {/* Pagination Dots */}
-              <div className="absolute bottom-6 left-1/2 -translate-x-1/2 flex gap-2 z-10">
-                {productImages.map((_, i) => (
-                  <div 
-                    key={i}
-                    className={`h-1.5 rounded-full transition-all duration-300 ${currentSlide === i ? 'w-6 bg-[#00A896]' : 'w-1.5 bg-white/50'}`}
-                  />
-                ))}
+          {/* Highlights Section (Moved here) */}
+          <div className="bg-white rounded-[40px] border border-zinc-100 p-10 shadow-sm">
+            <div className="mb-8">
+              <h2 className="text-2xl font-headline font-bold inline-block relative">
+                Đặc điểm nổi bật
+                <div className="absolute -bottom-2 left-0 w-full h-1 bg-[#00A896]/30 rounded-full" />
+              </h2>
+            </div>
+            
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-8">
+              <div className="space-y-4">
+                <h3 className="text-lg font-black text-brand flex items-center gap-3">
+                  <span className="w-7 h-7 rounded-lg bg-brand text-white flex items-center justify-center text-xs">1</span>
+                  Thông tin sản phẩm
+                </h3>
+                <ul className="space-y-3 text-zinc-500 text-xs leading-relaxed">
+                  <li className="flex gap-2">
+                    <span className="text-brand font-bold">•</span>
+                    Dung tích: 500ml / 750ml / 1000ml phù hợp mọi nhu cầu.
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-brand font-bold">•</span>
+                    Chất liệu: Thép không gỉ Inox 304 cao cấp, an toàn tuyệt đối.
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-brand font-bold">•</span>
+                    Cấu tạo: 2 lớp hút chân không giúp giữ nhiệt vượt trội.
+                  </li>
+                </ul>
               </div>
 
-              {/* Mobile Badges */}
-              <div className="absolute top-4 left-4 flex flex-col gap-2 pointer-events-none z-10">
-                <div className="bg-white/90 backdrop-blur-sm px-3 py-1.5 rounded-xl flex items-center gap-2 shadow-sm">
-                  <div className="w-2 h-2 rounded-full bg-[#00A896]" />
-                  <span className="text-[9px] font-black uppercase tracking-wider text-zinc-800">An toàn</span>
-                </div>
+              <div className="space-y-4">
+                <h3 className="text-lg font-black text-brand flex items-center gap-3">
+                  <span className="w-7 h-7 rounded-lg bg-brand text-white flex items-center justify-center text-xs">2</span>
+                  Tính năng nổi bật
+                </h3>
+                <ul className="space-y-3 text-zinc-500 text-xs leading-relaxed">
+                  <li className="flex gap-2">
+                    <span className="text-brand font-bold">•</span>
+                    Giữ nóng lên đến 12h, giữ lạnh lên đến 24h liên tục.
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-brand font-bold">•</span>
+                    Nắp chống tràn 100%, thoải mái mang đi mọi nơi.
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-brand font-bold">•</span>
+                    Sơn tĩnh điện cao cấp, chống trầy xước và bám vân tay.
+                  </li>
+                </ul>
+              </div>
+
+              <div className="space-y-4">
+                <h3 className="text-lg font-black text-brand flex items-center gap-3">
+                  <span className="w-7 h-7 rounded-lg bg-brand text-white flex items-center justify-center text-xs">3</span>
+                  Dịch vụ & Bảo hành
+                </h3>
+                <ul className="space-y-3 text-zinc-500 text-xs leading-relaxed">
+                  <li className="flex gap-2">
+                    <span className="text-brand font-bold">•</span>
+                    Bảo hành 1 đổi 1 trong vòng 3 tháng nếu có lỗi NSX.
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-brand font-bold">•</span>
+                    Kiểm tra hàng thoải mái trước khi thanh toán.
+                  </li>
+                  <li className="flex gap-2">
+                    <span className="text-brand font-bold">•</span>
+                    Hỗ trợ khắc tên, in logo theo yêu cầu riêng.
+                  </li>
+                </ul>
               </div>
             </div>
           </div>
@@ -1071,7 +1158,7 @@ const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product, 
                 {product.colors.map((color, i) => (
                   <button 
                     key={i} 
-                    onClick={() => setSelectedColor(color)}
+                    onClick={() => handleColorSelect(color)}
                     className={`w-12 h-12 rounded-full transition-all hover:scale-110 shadow-sm border-2 ${selectedColor === color ? 'border-primary ring-4 ring-primary/10' : 'border-white'}`}
                     style={{ backgroundColor: color.startsWith('#') ? color : '#e4e2e1' }}
                     title={color}
@@ -1100,24 +1187,21 @@ const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product, 
 
           <div className="space-y-6">
             <div className="flex items-center gap-6">
-              <div className="flex items-center bg-surface-container-high rounded-2xl p-1 h-16 w-44 shadow-inner">
+              <div className="flex items-center bg-surface-container-high rounded-2xl p-1 h-14 w-40 shadow-inner">
                 <button 
                   onClick={() => setQuantity(Math.max(1, quantity - 1))}
-                  className="w-14 h-full flex items-center justify-center text-zinc-400 hover:text-primary transition-colors"
+                  className="w-12 h-full flex items-center justify-center text-zinc-400 hover:text-primary transition-colors"
                 >
-                  <Minus size={20} strokeWidth={3} />
+                  <Minus size={16} strokeWidth={3} />
                 </button>
-                <span className="flex-1 text-center font-headline font-black text-xl">{quantity}</span>
+                <span className="flex-1 text-center font-headline font-black text-lg">{quantity}</span>
                 <button 
                   onClick={() => setQuantity(quantity + 1)}
-                  className="w-14 h-full flex items-center justify-center text-zinc-400 hover:text-primary transition-colors"
+                  className="w-12 h-full flex items-center justify-center text-zinc-400 hover:text-primary transition-colors"
                 >
-                  <Plus size={20} strokeWidth={3} />
+                  <Plus size={16} strokeWidth={3} />
                 </button>
               </div>
-              <button className="flex-1 h-16 border-2 border-zinc-100 rounded-2xl flex items-center justify-center gap-3 font-black text-xs uppercase tracking-widest text-zinc-500 hover:bg-surface-container-low hover:border-zinc-200 transition-all">
-                <Edit size={18} /> Thiết kế riêng
-              </button>
             </div>
             <div className="grid grid-cols-2 gap-4">
               <button 
@@ -1195,92 +1279,15 @@ const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product, 
         </div>
       </div>
 
-      {/* Highlights Section */}
-      <div className="mt-12">
-        <div className="mb-12">
-          <h2 className="text-3xl font-headline font-bold inline-block relative">
-            Đặc điểm nổi bật
-            <div className="absolute -bottom-2 left-0 w-full h-1 bg-[#00A896]/30 rounded-full" />
-          </h2>
-        </div>
-        
-        <div className="bg-white rounded-[40px] border border-zinc-100 p-12 shadow-sm">
-          <div className="grid grid-cols-1 lg:grid-cols-3 gap-16">
-            <div className="space-y-6">
-              <h3 className="text-xl font-black text-brand flex items-center gap-3">
-                <span className="w-8 h-8 rounded-lg bg-brand text-white flex items-center justify-center text-sm">1</span>
-                Thông tin sản phẩm
-              </h3>
-              <ul className="space-y-4 text-zinc-500 text-sm leading-relaxed">
-                <li className="flex gap-2">
-                  <span className="text-brand font-bold">•</span>
-                  Dung tích: 500ml / 750ml / 1000ml phù hợp mọi nhu cầu.
-                </li>
-                <li className="flex gap-2">
-                  <span className="text-brand font-bold">•</span>
-                  Chất liệu: Thép không gỉ Inox 304 cao cấp, an toàn tuyệt đối.
-                </li>
-                <li className="flex gap-2">
-                  <span className="text-brand font-bold">•</span>
-                  Cấu tạo: 2 lớp hút chân không giúp giữ nhiệt vượt trội.
-                </li>
-              </ul>
-            </div>
-
-            <div className="space-y-6">
-              <h3 className="text-xl font-black text-brand flex items-center gap-3">
-                <span className="w-8 h-8 rounded-lg bg-brand text-white flex items-center justify-center text-sm">2</span>
-                Tính năng nổi bật
-              </h3>
-              <ul className="space-y-4 text-zinc-500 text-sm leading-relaxed">
-                <li className="flex gap-2">
-                  <span className="text-brand font-bold">•</span>
-                  Giữ nóng lên đến 12h, giữ lạnh lên đến 24h liên tục.
-                </li>
-                <li className="flex gap-2">
-                  <span className="text-brand font-bold">•</span>
-                  Nắp chống tràn 100%, thoải mái mang đi mọi nơi.
-                </li>
-                <li className="flex gap-2">
-                  <span className="text-brand font-bold">•</span>
-                  Sơn tĩnh điện cao cấp, chống trầy xước và bám vân tay.
-                </li>
-              </ul>
-            </div>
-
-            <div className="space-y-6">
-              <h3 className="text-xl font-black text-brand flex items-center gap-3">
-                <span className="w-8 h-8 rounded-lg bg-brand text-white flex items-center justify-center text-sm">3</span>
-                Dịch vụ & Bảo hành
-              </h3>
-              <ul className="space-y-4 text-zinc-500 text-sm leading-relaxed">
-                <li className="flex gap-2">
-                  <span className="text-brand font-bold">•</span>
-                  Bảo hành 1 đổi 1 trong vòng 3 tháng nếu có lỗi NSX.
-                </li>
-                <li className="flex gap-2">
-                  <span className="text-brand font-bold">•</span>
-                  Kiểm tra hàng thoải mái trước khi thanh toán.
-                </li>
-                <li className="flex gap-2">
-                  <span className="text-brand font-bold">•</span>
-                  Hỗ trợ khắc tên, in logo theo yêu cầu riêng.
-                </li>
-              </ul>
-            </div>
-          </div>
-        </div>
-      </div>
-
       {/* Product Description Section */}
-      <div className="mt-12">
-        <div className="mb-12">
-          <h2 className="text-3xl font-headline font-bold inline-block relative">
+      <div className="mt-8">
+        <div className="mb-8">
+          <h2 className="text-2xl font-headline font-bold inline-block relative">
             Mô tả chi tiết
             <div className="absolute -bottom-2 left-0 w-full h-1 bg-[#00A896]/30 rounded-full" />
           </h2>
         </div>
-        <div className="bg-white p-12 rounded-[40px] border border-zinc-100 shadow-sm">
+        <div className="bg-white p-10 rounded-[40px] border border-zinc-100 shadow-sm">
           <div 
             className="text-zinc-600 leading-relaxed prose prose-lg max-w-none"
             dangerouslySetInnerHTML={{ __html: product.description }}
@@ -1289,9 +1296,9 @@ const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product, 
       </div>
 
       {/* Reviews Section */}
-      <div className="mt-12 pb-20">
-        <div className="mb-12">
-          <h2 className="text-3xl font-headline font-bold inline-block relative">
+      <div className="mt-8 pb-20">
+        <div className="mb-8">
+          <h2 className="text-2xl font-headline font-bold inline-block relative">
             Đánh giá sản phẩm
             <div className="absolute -bottom-2 left-0 w-full h-1 bg-[#00A896]/30 rounded-full" />
           </h2>
@@ -1440,7 +1447,7 @@ const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product, 
           </div>
         </div>
         <div className="grid grid-cols-2 lg:grid-cols-4 gap-8">
-          {PRODUCTS.slice(1, 5).map(p => (
+          {(products.length > 0 ? products : PRODUCTS).slice(1, 5).map(p => (
             <ProductCard key={p.id} product={p} onClick={() => {}} />
           ))}
         </div>
@@ -1477,6 +1484,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const [user, setUser] = useState<any | null>(null);
   const [role, setRole] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+  const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
 
@@ -1574,8 +1582,19 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     });
 
+    // Load products globally
+    const productsQuery = query(collection(db, 'products'), where('status', '==', 'active'));
+    const productsUnsubscribe = onSnapshot(productsQuery, (snapshot) => {
+      const prods = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
+      setProducts(prods.length > 0 ? prods : PRODUCTS);
+    }, (error) => {
+      console.error('Lỗi lấy sản phẩm:', error);
+      setProducts(PRODUCTS);
+    });
+
     return () => {
       unsubscribe();
+      productsUnsubscribe();
       if (cartUnsubscribe) cartUnsubscribe();
     };
   }, []);
@@ -1674,6 +1693,7 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
     user,
     role,
     loading,
+    products,
     cart,
     addToCart,
     removeFromCart,
@@ -1706,6 +1726,7 @@ const ProductEditModal = ({ product, onClose, onSave }: { product: Product | nul
       category: 'Cốc sứ',
       images: [],
       colors: [],
+      colorImageMap: {},
       sizes: [],
       status: 'active',
       isSale: false,
@@ -1719,11 +1740,13 @@ const ProductEditModal = ({ product, onClose, onSave }: { product: Product | nul
   const [isSaving, setIsSaving] = useState(false);
   const [showColorInput, setShowColorInput] = useState(false);
   const [newColor, setNewColor] = useState('');
+  const [newColorImageIndex, setNewColorImageIndex] = useState<string>('');
   const [showSizeInput, setShowSizeInput] = useState(false);
   const [newSize, setNewSize] = useState('');
 
   const images = watch('images') || [];
   const colors = watch('colors') || [];
+  const colorImageMap = watch('colorImageMap') || {};
   const sizes = watch('sizes') || [];
 
   useEffect(() => {
@@ -1738,6 +1761,7 @@ const ProductEditModal = ({ product, onClose, onSave }: { product: Product | nul
       category: 'Cốc sứ',
       images: [],
       colors: [],
+      colorImageMap: {},
       sizes: [],
       status: 'active',
       isSale: false,
@@ -1870,10 +1894,33 @@ const ProductEditModal = ({ product, onClose, onSave }: { product: Product | nul
   // Thêm biến thể màu sắc
   const handleAddColor = () => {
     if (newColor) {
-      setValue('colors', [...colors, newColor]);
+      const updatedColors = [...colors, newColor];
+      setValue('colors', updatedColors);
+      
+      if (newColorImageIndex !== '') {
+        const index = parseInt(newColorImageIndex);
+        if (!isNaN(index)) {
+          setValue('colorImageMap', {
+            ...colorImageMap,
+            [newColor]: index
+          });
+        }
+      }
+      
       setNewColor('');
+      setNewColorImageIndex('');
       setShowColorInput(false);
     }
+  };
+
+  const removeColor = (index: number) => {
+    const colorToRemove = colors[index];
+    const updatedColors = colors.filter((_, i) => i !== index);
+    setValue('colors', updatedColors);
+    
+    const updatedMap = { ...colorImageMap };
+    delete updatedMap[colorToRemove];
+    setValue('colorImageMap', updatedMap);
   };
 
   // Thêm biến thể dung tích/kích thước
@@ -2036,13 +2083,16 @@ const ProductEditModal = ({ product, onClose, onSave }: { product: Product | nul
                 <label className="text-sm font-bold text-brand uppercase tracking-tight flex items-center gap-2">
                   <Palette size={16} /> Biến thể màu sắc
                 </label>
-                <div className="flex flex-wrap gap-3">
+                <div className="flex flex-wrap gap-4">
                   {colors.map((color, i) => (
-                    <div key={i} className="group relative">
+                    <div key={i} className="group relative flex flex-col items-center gap-1">
                       <div className="w-10 h-10 rounded-full border-2 border-white shadow-sm" style={{ backgroundColor: color }} />
+                      {colorImageMap[color] !== undefined && (
+                        <span className="text-[10px] font-bold text-zinc-500">Ảnh {colorImageMap[color]}</span>
+                      )}
                       <button 
                         type="button"
-                        onClick={() => setValue('colors', colors.filter((_, idx) => idx !== i))}
+                        onClick={() => removeColor(i)}
                         className="absolute -top-1 -right-1 w-5 h-5 bg-red-500 text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity"
                       >
                         <X size={10} />
@@ -2051,30 +2101,41 @@ const ProductEditModal = ({ product, onClose, onSave }: { product: Product | nul
                   ))}
                   
                   {showColorInput ? (
-                    <div className="flex items-center gap-2 bg-surface-container-low p-1 rounded-full border border-brand/20">
-                      <input 
-                        type="text"
-                        value={newColor}
-                        onChange={(e) => setNewColor(e.target.value)}
-                        placeholder="#HEX hoặc tên"
-                        className="w-24 px-3 py-1 text-xs bg-transparent outline-none"
-                        autoFocus
-                        onKeyDown={(e) => e.key === 'Enter' && (e.preventDefault(), handleAddColor())}
-                      />
-                      <button 
-                        type="button"
-                        onClick={handleAddColor}
-                        className="w-7 h-7 bg-brand text-white rounded-full flex items-center justify-center"
-                      >
-                        <Check size={14} />
-                      </button>
-                      <button 
-                        type="button"
-                        onClick={() => setShowColorInput(false)}
-                        className="w-7 h-7 bg-zinc-200 text-zinc-500 rounded-full flex items-center justify-center"
-                      >
-                        <X size={14} />
-                      </button>
+                    <div className="flex flex-col gap-2 bg-surface-container-low p-3 rounded-2xl border border-brand/20">
+                      <div className="flex items-center gap-2">
+                        <input 
+                          type="text"
+                          value={newColor}
+                          onChange={(e) => setNewColor(e.target.value)}
+                          placeholder="#HEX hoặc tên"
+                          className="w-32 px-3 py-2 text-xs bg-white rounded-lg border border-zinc-200 outline-none focus:border-brand"
+                          autoFocus
+                        />
+                        <input 
+                          type="number"
+                          value={newColorImageIndex}
+                          onChange={(e) => setNewColorImageIndex(e.target.value)}
+                          placeholder="Số ảnh"
+                          className="w-20 px-3 py-2 text-xs bg-white rounded-lg border border-zinc-200 outline-none focus:border-brand"
+                          min="1"
+                        />
+                      </div>
+                      <div className="flex justify-end gap-2">
+                        <button 
+                          type="button"
+                          onClick={() => setShowColorInput(false)}
+                          className="px-3 py-1 bg-zinc-200 text-zinc-500 rounded-lg text-[10px] font-bold uppercase"
+                        >
+                          Hủy
+                        </button>
+                        <button 
+                          type="button"
+                          onClick={handleAddColor}
+                          className="px-3 py-1 bg-brand text-white rounded-lg text-[10px] font-bold uppercase"
+                        >
+                          Thêm
+                        </button>
+                      </div>
                     </div>
                   ) : (
                     <button 
@@ -2532,7 +2593,7 @@ const AdminView = () => {
 };
 
 const CheckoutView = ({ onBack }: { onBack: () => void }) => {
-  const { cart, user, clearCart, addToast, createOrder } = useFirebase();
+  const { cart, products, user, clearCart, addToast, createOrder } = useFirebase();
   const [paymentMethod, setPaymentMethod] = useState<'cod' | 'bank_transfer'>('cod');
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [coupon, setCoupon] = useState('');
@@ -2543,7 +2604,7 @@ const CheckoutView = ({ onBack }: { onBack: () => void }) => {
   const { register, handleSubmit, formState: { errors } } = useForm();
 
   const subtotal = cart.reduce((acc, item) => {
-    const p = PRODUCTS.find(prod => prod.id === item.productId);
+    const p = products.find(prod => prod.id === item.productId) || PRODUCTS.find(prod => prod.id === item.productId);
     return acc + (p ? p.price * item.quantity : 0);
   }, 0);
 
@@ -2759,7 +2820,7 @@ const CheckoutView = ({ onBack }: { onBack: () => void }) => {
             
             <div className="space-y-4 mb-8 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
               {cart.map(item => {
-                const p = PRODUCTS.find(prod => prod.id === item.productId);
+                const p = products.find(prod => prod.id === item.productId) || PRODUCTS.find(prod => prod.id === item.productId);
                 if (!p) return null;
                 return (
                   <div key={item.id} className="flex gap-4">
