@@ -738,7 +738,7 @@ const ProductListView = ({ onProductClick }: { onProductClick: (p: Product) => v
             <Filter size={14} /> Phân loại
           </h3>
           <div className="flex flex-col gap-3">
-            {['Tất cả sản phẩm', 'Cốc sứ & thủy tinh', 'Bình giữ nhiệt', 'Hộp cơm văn phòng'].map((cat, i) => (
+            {['Tất cả sản phẩm', 'Cốc giữ nhiệt', 'Cốc lót sứ', 'Bình giữ nhiệt', 'Bình nước'].map((cat, i) => (
               <label key={cat} className="flex items-center gap-3 text-sm text-zinc-600 hover:text-primary cursor-pointer group">
                 <input type="checkbox" defaultChecked={i === 1} className="rounded border-zinc-300 text-primary focus:ring-primary" />
                 <span>{cat}</span>
@@ -1723,7 +1723,7 @@ const ProductEditModal = ({ product, onClose, onSave }: { product: Product | nul
       originalPrice: 0,
       description: '',
       shortDescription: '',
-      category: 'Cốc sứ',
+      category: 'Cốc giữ nhiệt',
       images: [],
       colors: [],
       colorImageMap: {},
@@ -1758,7 +1758,7 @@ const ProductEditModal = ({ product, onClose, onSave }: { product: Product | nul
       originalPrice: 0,
       description: '',
       shortDescription: '',
-      category: 'Cốc sứ',
+      category: 'Cốc giữ nhiệt',
       images: [],
       colors: [],
       colorImageMap: {},
@@ -2253,10 +2253,10 @@ const ProductEditModal = ({ product, onClose, onSave }: { product: Product | nul
                     {...register('category')}
                     className="w-full p-4 rounded-2xl border border-zinc-200 focus:ring-2 focus:ring-brand/20 focus:border-brand outline-none transition-all bg-white"
                   >
-                    <option value="Cốc sứ">Cốc sứ</option>
-                    <option value="Cốc thủy tinh">Cốc thủy tinh</option>
+                    <option value="Cốc giữ nhiệt">Cốc giữ nhiệt</option>
+                    <option value="Cốc lót sứ">Cốc lót sứ</option>
                     <option value="Bình giữ nhiệt">Bình giữ nhiệt</option>
-                    <option value="Hộp cơm">Hộp cơm</option>
+                    <option value="Bình nước">Bình nước</option>
                   </select>
                 </div>
                 <div className="space-y-2">
