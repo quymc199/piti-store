@@ -18,6 +18,7 @@ export interface Product {
   isSale?: boolean;
   status?: 'active' | 'inactive';
   warrantyNote?: string;
+  createdAt?: any;
   updatedAt?: any;
 }
 

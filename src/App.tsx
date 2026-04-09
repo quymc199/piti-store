@@ -66,6 +66,23 @@ import {
 } from './firebase';
 import { ref, uploadBytes, getDownloadURL, uploadBytesResumable } from 'firebase/storage';
 
+// --- Constants ---
+
+const COLOR_MAP: Record<string, { hex: string, name: string }> = {
+  '#F9B7B7': { hex: '#F9B7B7', name: 'Hồng Pastel' },
+  '#212121': { hex: '#212121', name: 'Đen Nhám' },
+  '#C62828': { hex: '#C62828', name: 'Đỏ Táo' },
+  '#FDD835': { hex: '#FDD835', name: 'Vàng Chanh' },
+  '#2D4F36': { hex: '#2D4F36', name: 'Xanh Lá Cây' },
+  '#A2D2FF': { hex: '#A2D2FF', name: 'Xanh Sky' },
+  '#B19CD9': { hex: '#B19CD9', name: 'Hoa oải hương' },
+  '#FFFFFF': { hex: '#FFFFFF', name: 'Trắng' },
+  '#FF9A8B': { hex: '#FF9A8B', name: 'Cam San Hô' },
+  '#C4A484': { hex: '#C4A484', name: 'Beige / Kem' },
+  '#80DEEA': { hex: '#80DEEA', name: 'Xanh Bạc hà' },
+  'linear-gradient(to right, #E63946 50%, #A2D2FF 50%)': { hex: 'linear-gradient(to right, #E63946 50%, #A2D2FF 50%)', name: 'Đỏ xanh' }
+};
+
 // --- Types ---
 
 interface CartItem {
@@ -340,7 +357,7 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
 
 // --- Components ---
 
-const Navbar = ({ onNavigate, currentView, openAuth }: { onNavigate: (view: 'list' | 'detail' | 'admin' | 'admin_orders' | 'checkout', product?: Product) => void, currentView: string, openAuth: () => void }) => {
+const Navbar = ({ onNavigate, currentView, openAuth }: { onNavigate: (view: 'list' | 'detail' | 'admin' | 'admin_orders' | 'checkout', product?: Product, category?: string) => void, currentView: string, openAuth: () => void }) => {
   const { user, role, cart } = useFirebase();
   const [showCart, setShowCart] = useState(false);
 
@@ -358,16 +375,28 @@ const Navbar = ({ onNavigate, currentView, openAuth }: { onNavigate: (view: 'lis
         </div>
         <div className="hidden md:flex items-center gap-10 font-headline font-medium tracking-tight">
           <button 
-            onClick={() => onNavigate('list')}
+            onClick={() => onNavigate('list', undefined, 'Cốc giữ nhiệt')}
             className={`flex items-center gap-2 transition-all duration-300 ${currentView === 'list' ? 'text-brand border-b-2 border-brand pb-1' : 'text-zinc-500 hover:text-brand'}`}
           >
-            <Grid size={16} /> Cốc
+            <Grid size={16} /> Cốc giữ nhiệt
           </button>
-          <button className="flex items-center gap-2 text-zinc-500 hover:text-brand transition-all duration-300">
-            <Droplets size={16} /> Bình
+          <button 
+            onClick={() => onNavigate('list', undefined, 'Cốc lót sứ')}
+            className="flex items-center gap-2 text-zinc-500 hover:text-brand transition-all duration-300"
+          >
+            <Layers size={16} /> Cốc lót sứ
           </button>
-          <button className="flex items-center gap-2 text-zinc-500 hover:text-brand transition-all duration-300">
-            <Utensils size={16} /> Hộp cơm
+          <button 
+            onClick={() => onNavigate('list', undefined, 'Bình giữ nhiệt')}
+            className="flex items-center gap-2 text-zinc-500 hover:text-brand transition-all duration-300"
+          >
+            <Droplets size={16} /> Bình giữ nhiệt
+          </button>
+          <button 
+            onClick={() => onNavigate('list', undefined, 'Bình nước')}
+            className="flex items-center gap-2 text-zinc-500 hover:text-brand transition-all duration-300"
+          >
+            <Thermometer size={16} /> Bình nước
           </button>
           {role === 'admin' && user?.email === 'quyquyquyet1999@gmail.com' && (
             <div className="hidden md:flex items-center gap-6 border-l border-zinc-100 pl-6 ml-2">
@@ -641,13 +670,24 @@ const ContactWidget = () => {
 interface ProductCardProps {
   product: Product;
   onClick: () => void;
+  filteredColor?: string;
 }
 
-const ProductCard: React.FC<ProductCardProps> = ({ product, onClick }) => {
+const ProductCard: React.FC<ProductCardProps> = ({ product, onClick, filteredColor }) => {
   const { role, user } = useFirebase();
   const [isHovered, setIsHovered] = useState(false);
 
-  const displayImage = (product.images?.[0] || product.image) || PLACEHOLDER_IMAGE;
+  const productImages = product.images && product.images.length > 0 ? product.images : [product.image, product.hoverImage];
+  
+  let displayImage = (product.images?.[0] || product.image) || PLACEHOLDER_IMAGE;
+  
+  if (filteredColor && product.colorImageMap?.[filteredColor]) {
+    const imgIndex = product.colorImageMap[filteredColor] - 1;
+    if (productImages[imgIndex]) {
+      displayImage = productImages[imgIndex];
+    }
+  }
+
   const hoverImage = (product.images?.[1] || product.hoverImage || displayImage) || PLACEHOLDER_IMAGE;
 
   return (
@@ -714,9 +754,21 @@ const ProductCard: React.FC<ProductCardProps> = ({ product, onClick }) => {
 
 // --- Views ---
 
-const ProductListView = ({ onProductClick }: { onProductClick: (p: Product) => void }) => {
+const ProductListView = ({ onProductClick, initialCategory }: { onProductClick: (p: Product) => void, initialCategory?: string }) => {
   const { products, loading: firebaseLoading } = useFirebase();
   const [loading, setLoading] = useState(true);
+  
+  // Filter States
+  const [selectedCategories, setSelectedCategories] = useState<string[]>(initialCategory ? [initialCategory] : []);
+  const [maxPrice, setMaxPrice] = useState(1000000);
+  const [selectedColors, setSelectedColors] = useState<string[]>([]);
+  const [sortBy, setSortBy] = useState('Mới nhất');
+
+  useEffect(() => {
+    if (initialCategory) {
+      setSelectedCategories([initialCategory]);
+    }
+  }, [initialCategory]);
 
   useEffect(() => {
     if (!firebaseLoading) {
@@ -724,10 +776,76 @@ const ProductListView = ({ onProductClick }: { onProductClick: (p: Product) => v
     }
   }, [firebaseLoading]);
 
+  // Dynamic Color Extraction
+  const dynamicColors = React.useMemo(() => {
+    const colorCounts: Record<string, number> = {};
+    products.forEach(p => {
+      if (p.colors) {
+        p.colors.forEach(c => {
+          colorCounts[c] = (colorCounts[c] || 0) + 1;
+        });
+      }
+    });
+    return Object.entries(colorCounts).map(([hex, count]) => ({
+      hex,
+      count,
+      name: COLOR_MAP[hex]?.name || 'Màu khác'
+    })).sort((a, b) => b.count - a.count);
+  }, [products]);
+
+  // Filtered Products
+  const filteredProducts = React.useMemo(() => {
+    let result = [...products];
+
+    // Category Filter
+    if (selectedCategories.length > 0) {
+      result = result.filter(p => selectedCategories.includes(p.category));
+    }
+
+    // Price Filter
+    result = result.filter(p => p.price <= maxPrice);
+
+    // Color Filter
+    if (selectedColors.length > 0) {
+      result = result.filter(p => p.colors && p.colors.some(c => selectedColors.includes(c)));
+    }
+
+    // Sort
+    if (sortBy === 'Giá: Thấp đến Cao') {
+      result.sort((a, b) => a.price - b.price);
+    } else if (sortBy === 'Giá: Cao đến Thấp') {
+      result.sort((a, b) => b.price - a.price);
+    } else {
+      result.sort((a, b) => {
+        const dateA = a.createdAt?.seconds || 0;
+        const dateB = b.createdAt?.seconds || 0;
+        return dateB - dateA;
+      });
+    }
+
+    return result;
+  }, [products, selectedCategories, maxPrice, selectedColors, sortBy]);
+
+  const toggleCategory = (cat: string) => {
+    if (cat === 'Tất cả sản phẩm') {
+      setSelectedCategories([]);
+      return;
+    }
+    setSelectedCategories(prev => 
+      prev.includes(cat) ? prev.filter(c => c !== cat) : [...prev, cat]
+    );
+  };
+
+  const toggleColor = (hex: string) => {
+    setSelectedColors(prev => 
+      prev.includes(hex) ? prev.filter(c => c !== hex) : [...prev, hex]
+    );
+  };
+
   return (
     <div className="max-w-7xl mx-auto px-8 pt-32 flex gap-12">
       {/* Sidebar */}
-      <aside className="hidden lg:flex w-64 h-fit sticky top-32 flex-col p-6 gap-8 bg-white shadow-sm rounded-xl">
+      <aside className="hidden lg:flex w-72 h-fit sticky top-32 flex-col p-6 gap-8 bg-white shadow-sm rounded-xl border border-zinc-100">
         <div>
           <h2 className="text-lg font-bold text-brand font-headline uppercase tracking-wider mb-1">Bộ lọc</h2>
           <p className="text-zinc-500 text-[10px] uppercase tracking-widest font-bold">Tùy chỉnh tìm kiếm</p>
@@ -738,20 +856,38 @@ const ProductListView = ({ onProductClick }: { onProductClick: (p: Product) => v
             <Filter size={14} /> Phân loại
           </h3>
           <div className="flex flex-col gap-3">
-            {['Tất cả sản phẩm', 'Cốc giữ nhiệt', 'Cốc lót sứ', 'Bình giữ nhiệt', 'Bình nước'].map((cat, i) => (
+            {['Tất cả sản phẩm', 'Cốc giữ nhiệt', 'Cốc lót sứ', 'Bình giữ nhiệt', 'Bình nước'].map((cat) => (
               <label key={cat} className="flex items-center gap-3 text-sm text-zinc-600 hover:text-primary cursor-pointer group">
-                <input type="checkbox" defaultChecked={i === 1} className="rounded border-zinc-300 text-primary focus:ring-primary" />
-                <span>{cat}</span>
+                <input 
+                  type="checkbox" 
+                  checked={cat === 'Tất cả sản phẩm' ? selectedCategories.length === 0 : selectedCategories.includes(cat)}
+                  onChange={() => toggleCategory(cat)}
+                  className="rounded border-zinc-300 text-primary focus:ring-primary" 
+                />
+                <span className={selectedCategories.includes(cat) || (cat === 'Tất cả sản phẩm' && selectedCategories.length === 0) ? 'text-primary font-bold' : ''}>
+                  {cat}
+                </span>
               </label>
             ))}
           </div>
         </section>
 
         <section className="space-y-4">
-          <h3 className="text-sm font-bold text-brand font-headline uppercase tracking-tight flex items-center gap-2">
-            <ShoppingBag size={14} /> Mức giá
-          </h3>
-          <input type="range" className="w-full h-1 bg-surface-variant rounded-lg appearance-none cursor-pointer accent-primary" />
+          <div className="flex justify-between items-center">
+            <h3 className="text-sm font-bold text-brand font-headline uppercase tracking-tight flex items-center gap-2">
+              <ShoppingBag size={14} /> Mức giá
+            </h3>
+            <span className="text-xs font-bold text-primary">{maxPrice.toLocaleString()}đ</span>
+          </div>
+          <input 
+            type="range" 
+            min="0"
+            max="1000000"
+            step="10000"
+            value={maxPrice}
+            onChange={(e) => setMaxPrice(parseInt(e.target.value))}
+            className="w-full h-1.5 bg-zinc-100 rounded-lg appearance-none cursor-pointer accent-primary" 
+          />
           <div className="flex justify-between text-[10px] font-medium text-zinc-500">
             <span>0đ</span>
             <span>1.000.000đ</span>
@@ -760,11 +896,26 @@ const ProductListView = ({ onProductClick }: { onProductClick: (p: Product) => v
 
         <section className="space-y-4">
           <h3 className="text-sm font-bold text-brand font-headline uppercase tracking-tight flex items-center gap-2">
-            <ImageIcon size={14} /> Màu sắc
+            <Palette size={14} /> Màu sắc
           </h3>
-          <div className="grid grid-cols-4 gap-2">
-            {['#49624a', '#e4e2e1', '#303030', '#ffdad4', '#cdeacb', '#dc3220'].map((color, i) => (
-              <button key={i} className={`w-8 h-8 rounded-full border border-zinc-200 transition-transform hover:scale-110 ${i === 0 ? 'ring-2 ring-offset-2 ring-primary' : ''}`} style={{ backgroundColor: color }}></button>
+          <div className="flex flex-col gap-2 max-h-64 overflow-y-auto pr-2 custom-scrollbar">
+            {dynamicColors.map((color) => (
+              <button 
+                key={color.hex} 
+                onClick={() => toggleColor(color.hex)}
+                className={`flex items-center justify-between p-2 rounded-xl transition-all border ${selectedColors.includes(color.hex) ? 'border-primary bg-primary/5' : 'border-transparent hover:bg-surface-container-low'}`}
+              >
+                <div className="flex items-center gap-3">
+                  <div 
+                    className="w-5 h-5 rounded-full border border-zinc-200 shadow-sm" 
+                    style={{ background: color.hex }}
+                  />
+                  <span className={`text-xs ${selectedColors.includes(color.hex) ? 'font-bold text-primary' : 'text-zinc-600'}`}>
+                    {color.name}
+                  </span>
+                </div>
+                <span className="text-[10px] font-bold text-zinc-400">({color.count})</span>
+              </button>
             ))}
           </div>
         </section>
@@ -772,14 +923,32 @@ const ProductListView = ({ onProductClick }: { onProductClick: (p: Product) => v
 
       {/* Main Content */}
       <div className="flex-1">
-        <div className="flex justify-between items-end mb-12">
+        <div className="flex flex-col md:flex-row justify-between items-start md:items-end mb-12 gap-6">
           <div>
             <h1 className="text-4xl font-extrabold text-brand font-headline tracking-tight">PiTi Store</h1>
             <p className="text-zinc-500 mt-2 font-light max-w-xl">PiTi Store - Bình & Cốc Giữ Nhiệt Cao Cấp. Gói giàu sự tinh tế trong từng sản phẩm.</p>
+            { (selectedCategories.length > 0 || selectedColors.length > 0 || maxPrice < 1000000) && (
+              <div className="flex flex-wrap gap-2 mt-4">
+                <button 
+                  onClick={() => {
+                    setSelectedCategories([]);
+                    setSelectedColors([]);
+                    setMaxPrice(1000000);
+                  }}
+                  className="text-[10px] font-bold text-red-500 uppercase tracking-widest hover:underline"
+                >
+                  Xóa tất cả lọc
+                </button>
+              </div>
+            )}
           </div>
           <div className="flex items-center gap-2 text-sm text-zinc-600 font-medium bg-surface-container-low px-4 py-2 rounded-lg">
             <span>Sắp xếp theo:</span>
-            <select className="bg-transparent border-none focus:ring-0 text-brand font-bold cursor-pointer">
+            <select 
+              value={sortBy}
+              onChange={(e) => setSortBy(e.target.value)}
+              className="bg-transparent border-none focus:ring-0 text-brand font-bold cursor-pointer"
+            >
               <option>Mới nhất</option>
               <option>Giá: Thấp đến Cao</option>
               <option>Giá: Cao đến Thấp</option>
@@ -798,36 +967,54 @@ const ProductListView = ({ onProductClick }: { onProductClick: (p: Product) => v
               </div>
             ))}
           </div>
+        ) : filteredProducts.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-20 text-center">
+            <div className="w-20 h-20 bg-surface-container-low rounded-full flex items-center justify-center text-zinc-300 mb-4">
+              <Search size={40} />
+            </div>
+            <h3 className="text-xl font-bold text-brand">Không tìm thấy sản phẩm</h3>
+            <p className="text-zinc-500 mt-2">Vui lòng thử điều chỉnh bộ lọc của bạn</p>
+          </div>
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-3 gap-x-8 gap-y-12">
-            {products.map(product => (
-              <ProductCard key={product.id} product={product} onClick={() => onProductClick(product)} />
+            {filteredProducts.map(product => (
+              <ProductCard 
+                key={product.id} 
+                product={product} 
+                filteredColor={selectedColors.length === 1 ? selectedColors[0] : undefined}
+                onClick={() => onProductClick({
+                  ...product,
+                  initialColor: selectedColors.length === 1 ? selectedColors[0] : undefined
+                } as any)} 
+              />
             ))}
           </div>
         )}
 
         {/* Pagination */}
-        <div className="mt-20 flex justify-center gap-2">
-          <button className="w-10 h-10 flex items-center justify-center rounded-lg bg-primary text-white font-bold shadow-lg shadow-primary/20">1</button>
-          <button className="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-surface-container-low text-zinc-400 transition-all font-bold">2</button>
-          <button className="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-surface-container-low text-zinc-400 transition-all font-bold">3</button>
-          <button className="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-surface-container-low text-zinc-400 transition-all">
-            <ChevronRight size={18} />
-          </button>
-        </div>
+        {filteredProducts.length > 0 && (
+          <div className="mt-20 flex justify-center gap-2">
+            <button className="w-10 h-10 flex items-center justify-center rounded-lg bg-primary text-white font-bold shadow-lg shadow-primary/20">1</button>
+            <button className="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-surface-container-low text-zinc-400 transition-all font-bold">2</button>
+            <button className="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-surface-container-low text-zinc-400 transition-all font-bold">3</button>
+            <button className="w-10 h-10 flex items-center justify-center rounded-lg hover:bg-surface-container-low text-zinc-400 transition-all">
+              <ChevronRight size={18} />
+            </button>
+          </div>
+        )}
       </div>
     </div>
   );
 };
 
-const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product, onBack: () => void, onCheckout: () => void }) => {
+const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product & { initialColor?: string }, onBack: () => void, onCheckout: () => void }) => {
   const { user, products, addToCart, addToast } = useFirebase();
   const [selectedImage, setSelectedImage] = useState(product.images?.[0] || product.image);
   const [zoomPos, setZoomPos] = useState({ x: 0, y: 0 });
   const [isZooming, setIsZooming] = useState(false);
   const [currentSlide, setCurrentSlide] = useState(0);
   const [quantity, setQuantity] = useState(1);
-  const [selectedColor, setSelectedColor] = useState(product.colors[0]);
+  const [selectedColor, setSelectedColor] = useState(product.initialColor || product.colors[0]);
   const [selectedSize, setSelectedSize] = useState(product.sizes?.[0] || '');
   const [reviews, setReviews] = useState<Review[]>([]);
   const [newReview, setNewReview] = useState({ rating: 5, comment: '' });
@@ -881,7 +1068,19 @@ const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product, 
   };
 
   useEffect(() => {
-    setSelectedImage(product.images?.[0] || product.image);
+    if (product.initialColor) {
+      setSelectedColor(product.initialColor);
+      const imageIndex = product.colorImageMap?.[product.initialColor];
+      if (imageIndex !== undefined) {
+        const targetIndex = imageIndex - 1;
+        if (productImages[targetIndex]) {
+          setSelectedImage(productImages[targetIndex]);
+        }
+      }
+    } else {
+      setSelectedImage(product.images?.[0] || product.image);
+      setSelectedColor(product.colors[0]);
+    }
   }, [product]);
 
   useEffect(() => {
@@ -3047,11 +3246,11 @@ const OrderManagementView = () => {
 };
 
 export default function App() {
-  const [view, setView] = useState<{ type: 'list' | 'detail' | 'admin' | 'admin_orders' | 'checkout', product?: Product }>({ type: 'list' });
+  const [view, setView] = useState<{ type: 'list' | 'detail' | 'admin' | 'admin_orders' | 'checkout', product?: Product, category?: string }>({ type: 'list' });
   const [isAuthModalOpen, setIsAuthModalOpen] = useState(false);
 
-  const handleNavigate = (type: 'list' | 'detail' | 'admin' | 'admin_orders' | 'checkout', product?: Product) => {
-    setView({ type, product });
+  const handleNavigate = (type: 'list' | 'detail' | 'admin' | 'admin_orders' | 'checkout', product?: Product, category?: string) => {
+    setView({ type, product, category });
     window.scrollTo(0, 0);
   };
 
@@ -3074,7 +3273,10 @@ export default function App() {
                   animate={{ opacity: 1 }}
                   exit={{ opacity: 0 }}
                 >
-                  <ProductListView onProductClick={(p) => handleNavigate('detail', p)} />
+                  <ProductListView 
+                    onProductClick={(p) => handleNavigate('detail', p)} 
+                    initialCategory={view.category}
+                  />
                 </motion.div>
               )}
               {view.type === 'detail' && view.product && (
