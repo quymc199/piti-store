@@ -56,6 +56,23 @@ import {
 import { motion, AnimatePresence } from 'motion/react';
 import { useForm, Controller } from 'react-hook-form';
 import { useDropzone } from 'react-dropzone';
+import {
+  DndContext,
+  closestCenter,
+  KeyboardSensor,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  DragEndEvent
+} from '@dnd-kit/core';
+import {
+  arrayMove,
+  SortableContext,
+  sortableKeyboardCoordinates,
+  rectSortingStrategy,
+  useSortable
+} from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import ReactQuill from 'react-quill-new';
 import { PRODUCTS, Product, PLACEHOLDER_IMAGE } from './constants';
 import { 
@@ -328,7 +345,11 @@ class ErrorBoundary extends React.Component<{ children: React.ReactNode }, { has
       let message = "Đã có lỗi xảy ra.";
       try {
         const errInfo = JSON.parse(this.state.error.message);
-        message = `Lỗi Firestore: ${errInfo.error} (${errInfo.operationType} at ${errInfo.path})`;
+        if (errInfo.error.includes('Quota exceeded')) {
+          message = "Hệ thống đang tạm thời hết hạn mức truy cập miễn phí (Firestore Quota Exceeded). Vui lòng quay lại sau hoặc liên hệ quản trị viên.";
+        } else {
+          message = `Lỗi Firestore: ${errInfo.error} (${errInfo.operationType} at ${errInfo.path})`;
+        }
       } catch (e) {
         message = this.state.error.message || message;
       }
@@ -1747,15 +1768,17 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
           // Merge local cart to firestore on login
           const localCart = JSON.parse(localStorage.getItem('piti_cart') || '[]');
           if (localCart.length > 0) {
+            const cartRef = collection(db, 'users', u.uid, 'cart');
+            const currentCartSnap = await getDocs(cartRef);
+            const currentCartItems = currentCartSnap.docs.map(doc => ({ id: doc.id, ...doc.data() } as CartItem));
+
             for (const item of localCart) {
-              const cartRef = collection(db, 'users', u.uid, 'cart');
-              const q = query(cartRef, where('productId', '==', item.productId), where('color', '==', item.color));
-              const snap = await getDocs(q);
-              if (snap.empty) {
+              const existingItem = currentCartItems.find(i => i.productId === item.productId && i.color === item.color);
+              if (!existingItem) {
                 await addDoc(cartRef, { ...item, addedAt: serverTimestamp() });
               } else {
-                const docRef = doc(db, 'users', u.uid, 'cart', snap.docs[0].id);
-                await updateDoc(docRef, { quantity: snap.docs[0].data().quantity + item.quantity });
+                const docRef = doc(db, 'users', u.uid, 'cart', existingItem.id);
+                await updateDoc(docRef, { quantity: existingItem.quantity + item.quantity });
               }
             }
             localStorage.removeItem('piti_cart');
@@ -1781,14 +1804,36 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
       setLoading(false);
     });
 
-    // Load products globally
+    // Load products globally with caching
+    const cachedProducts = localStorage.getItem('piti_products_cache');
+    if (cachedProducts) {
+      try {
+        setProducts(JSON.parse(cachedProducts));
+      } catch (e) {
+        console.error('Lỗi parse cache sản phẩm:', e);
+      }
+    }
+
     const productsQuery = query(collection(db, 'products'), where('status', '==', 'active'));
     const productsUnsubscribe = onSnapshot(productsQuery, (snapshot) => {
       const prods = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
-      setProducts(prods.length > 0 ? prods : PRODUCTS);
+      if (prods.length > 0) {
+        setProducts(prods);
+        localStorage.setItem('piti_products_cache', JSON.stringify(prods));
+      } else if (snapshot.metadata.fromCache === false) {
+        // Only set to empty if we are sure the server has no products
+        setProducts([]);
+      }
     }, (error) => {
       console.error('Lỗi lấy sản phẩm:', error);
-      setProducts(PRODUCTS);
+      if (error.message.includes('Quota exceeded')) {
+        addToast('Hệ thống đang quá tải (hết hạn mức miễn phí). Đang hiển thị dữ liệu tạm thời.', 'info');
+      }
+      // If we have cached products, we already set them above. 
+      // If not, fallback to static PRODUCTS.
+      if (!localStorage.getItem('piti_products_cache')) {
+        setProducts(PRODUCTS);
+      }
     });
 
     return () => {
@@ -1912,6 +1957,45 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
 
 // --- Admin Components ---
 
+const SortableImage = ({ url, index, onRemove }: { url: string, index: number, onRemove: (index: number) => void }) => {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    transition,
+    isDragging
+  } = useSortable({ id: url });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    zIndex: isDragging ? 50 : 1,
+  };
+
+  return (
+    <div 
+      ref={setNodeRef} 
+      style={style} 
+      className={`relative group aspect-square rounded-2xl overflow-hidden bg-surface-container-low border border-zinc-100 ${isDragging ? 'opacity-50 shadow-2xl' : 'opacity-100'}`}
+    >
+      <div {...attributes} {...listeners} className="w-full h-full cursor-grab active:cursor-grabbing">
+        <img src={url || PLACEHOLDER_IMAGE} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+      </div>
+      <button 
+        type="button"
+        onClick={() => onRemove(index)}
+        className="absolute top-2 right-2 w-8 h-8 bg-white/90 backdrop-blur-md text-red-500 rounded-full flex items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500 hover:text-white z-20"
+      >
+        <X size={16} />
+      </button>
+      {index === 0 && (
+        <div className="absolute top-2 left-2 bg-brand text-white text-[8px] font-bold px-2 py-0.5 rounded uppercase pointer-events-none">Ảnh chính</div>
+      )}
+    </div>
+  );
+};
+
 const ProductEditModal = ({ product, onClose, onSave }: { product: Product | null, onClose: () => void, onSave: () => void }) => {
   const { addToast, user } = useFirebase();
   const { register, handleSubmit, control, watch, setValue, reset } = useForm<Partial<Product>>({
@@ -1947,6 +2031,25 @@ const ProductEditModal = ({ product, onClose, onSave }: { product: Product | nul
   const colors = watch('colors') || [];
   const colorImageMap = watch('colorImageMap') || {};
   const sizes = watch('sizes') || [];
+
+  const sensors = useSensors(
+    useSensor(PointerSensor),
+    useSensor(KeyboardSensor, {
+      coordinateGetter: sortableKeyboardCoordinates,
+    })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+
+    if (over && active.id !== over.id) {
+      const oldIndex = images.indexOf(active.id as string);
+      const newIndex = images.indexOf(over.id as string);
+      
+      const newImages = arrayMove(images, oldIndex, newIndex);
+      setValue('images', newImages, { shouldDirty: true });
+    }
+  };
 
   useEffect(() => {
     if (product) reset(product);
@@ -2259,23 +2362,27 @@ const ProductEditModal = ({ product, onClose, onSave }: { product: Product | nul
                   </div>
                 )}
 
-                <div className="grid grid-cols-3 gap-4">
-                  {images.map((url, index) => (
-                    <div key={index} className="relative group aspect-square rounded-2xl overflow-hidden bg-surface-container-low border border-zinc-100">
-                      <img src={url || PLACEHOLDER_IMAGE} alt="" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                      <button 
-                        type="button"
-                        onClick={() => removeImage(index)}
-                        className="absolute top-2 right-2 w-8 h-8 bg-white/90 backdrop-blur-md text-red-500 rounded-full flex items-center justify-center shadow-lg opacity-0 group-hover:opacity-100 transition-all hover:bg-red-500 hover:text-white"
-                      >
-                        <X size={16} />
-                      </button>
-                      {index === 0 && (
-                        <div className="absolute top-2 left-2 bg-brand text-white text-[8px] font-bold px-2 py-0.5 rounded uppercase">Ảnh chính</div>
-                      )}
+                <DndContext 
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragEnd={handleDragEnd}
+                >
+                  <SortableContext 
+                    items={images}
+                    strategy={rectSortingStrategy}
+                  >
+                    <div className="grid grid-cols-3 gap-4">
+                      {images.map((url, index) => (
+                        <SortableImage 
+                          key={url} 
+                          url={url} 
+                          index={index} 
+                          onRemove={removeImage} 
+                        />
+                      ))}
                     </div>
-                  ))}
-                </div>
+                  </SortableContext>
+                </DndContext>
               </div>
 
               <div className="space-y-4">
@@ -2592,14 +2699,14 @@ const AdminView = () => {
     let skippedCount = 0;
     try {
       console.log('Bắt đầu đồng bộ', PRODUCTS.length, 'sản phẩm mẫu');
+      
+      // Fetch all existing products once to check in memory
+      const existingSnap = await getDocs(collection(db, 'products'));
+      const existingNames = new Set(existingSnap.docs.map(doc => doc.data().name));
+
       for (const p of PRODUCTS) {
-        // Kiểm tra xem sản phẩm đã tồn tại chưa dựa trên tên
-        const q = query(collection(db, 'products'), where('name', '==', p.name));
-        const snap = await getDocs(q);
-        
-        if (snap.empty) {
+        if (!existingNames.has(p.name)) {
           const { id, ...prodData } = p;
-          // Đảm bảo mảng images được khởi tạo đúng
           const images = p.images && p.images.length > 0 ? p.images : [p.image, p.hoverImage].filter(Boolean);
           
           await addDoc(collection(db, 'products'), {
@@ -2610,10 +2717,8 @@ const AdminView = () => {
             updatedAt: serverTimestamp()
           });
           addedCount++;
-          console.log('Đã thêm sản phẩm:', p.name);
         } else {
           skippedCount++;
-          console.log('Sản phẩm đã tồn tại:', p.name);
         }
       }
       addToast(`Đã nhập thành công ${addedCount} sản phẩm mẫu. Bỏ qua ${skippedCount} sản phẩm đã tồn tại.`, 'success');
