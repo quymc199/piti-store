@@ -1109,7 +1109,13 @@ const ProductDetailView = ({ product, onBack, onCheckout }: { product: Product &
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const revs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Review));
       setReviews(revs.sort((a, b) => b.createdAt?.toMillis() - a.createdAt?.toMillis()));
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'reviews'));
+    }, (error) => {
+      if (error.message.includes('Quota exceeded')) {
+        addToast('Không thể tải đánh giá (hết hạn mức).', 'info');
+      } else {
+        handleFirestoreError(error, OperationType.LIST, 'reviews');
+      }
+    });
 
     return () => unsubscribe();
   }, [product.id]);
@@ -1707,8 +1713,15 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   const [products, setProducts] = useState<Product[]>([]);
   const [cart, setCart] = useState<CartItem[]>([]);
   const [toasts, setToasts] = useState<Toast[]>([]);
+  const lastQuotaToastTime = useRef<number>(0);
 
   const addToast = (message: string, type: 'success' | 'error' | 'info' = 'success') => {
+    // Prevent spamming quota toasts
+    if (message.includes('Quota exceeded') || message.includes('quá tải')) {
+      const now = Date.now();
+      if (now - lastQuotaToastTime.current < 60000) return; // Only show once per minute
+      lastQuotaToastTime.current = now;
+    }
     const id = Math.random().toString(36).substring(7);
     setToasts(prev => [...prev, { id, message, type }]);
     setTimeout(() => removeToast(id), 5000);
@@ -1737,32 +1750,51 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
       if (u) {
         const userDoc = doc(db, 'users', u.uid);
         try {
+          // Try to get role from cache first to show UI immediately
+          const cachedRole = localStorage.getItem(`piti_role_${u.uid}`);
+          if (cachedRole) {
+            setRole(cachedRole as 'admin' | 'client');
+          }
+
           const userSnap = await getDoc(userDoc);
           
+          let currentRole: 'admin' | 'client' = 'client';
+          const isDefaultAdmin = u.email === 'quyquyquyet1999@gmail.com';
+
           if (!userSnap.exists()) {
-            const isDefaultAdmin = u.email === 'quyquyquyet1999@gmail.com';
+            currentRole = isDefaultAdmin ? 'admin' : 'client';
             const newUser = {
               uid: u.uid,
               displayName: u.displayName,
               email: u.email,
               photoURL: u.photoURL,
-              role: isDefaultAdmin ? 'admin' : 'client',
+              role: currentRole,
               createdAt: serverTimestamp()
             };
             await setDoc(userDoc, newUser);
-            setRole(newUser.role);
           } else {
             const userData = userSnap.data();
-            const isDefaultAdmin = u.email === 'quyquyquyet1999@gmail.com';
-            const currentRole = isDefaultAdmin ? 'admin' : (userData?.role || 'client');
-            setRole(currentRole);
+            currentRole = isDefaultAdmin ? 'admin' : (userData?.role || 'client');
             
-            await updateDoc(userDoc, {
-              displayName: u.displayName,
-              email: u.email,
-              photoURL: u.photoURL,
-              ...(isDefaultAdmin && userData?.role !== 'admin' ? { role: 'admin' } : {})
-            });
+            // Only update if data actually changed to save writes
+            if (userData?.displayName !== u.displayName || 
+                userData?.email !== u.email || 
+                userData?.photoURL !== u.photoURL ||
+                (isDefaultAdmin && userData?.role !== 'admin')) {
+              await updateDoc(userDoc, {
+                displayName: u.displayName,
+                email: u.email,
+                photoURL: u.photoURL,
+                ...(isDefaultAdmin && userData?.role !== 'admin' ? { role: 'admin' } : {})
+              });
+            }
+          }
+          
+          setRole(currentRole);
+          try {
+            localStorage.setItem(`piti_role_${u.uid}`, currentRole);
+          } catch (e) {
+            console.warn('LocalStorage full, could not cache role:', e);
           }
 
           // Merge local cart to firestore on login
@@ -1790,11 +1822,22 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
             setCart(items);
           }, (error) => {
             if (auth.currentUser?.uid === u.uid) {
-              handleFirestoreError(error, OperationType.LIST, `users/${u.uid}/cart`);
+              if (error.message.includes('Quota exceeded')) {
+                addToast('Không thể tải giỏ hàng từ máy chủ (hết hạn mức).', 'info');
+              } else {
+                handleFirestoreError(error, OperationType.LIST, `users/${u.uid}/cart`);
+              }
             }
           });
-        } catch (e) {
-          handleFirestoreError(e, OperationType.GET, `users/${u.uid}`);
+        } catch (e: any) {
+          console.error('Auth error:', e);
+          if (e.message?.includes('Quota exceeded')) {
+            // Fallback to cached role if quota exceeded
+            const cachedRole = localStorage.getItem(`piti_role_${u.uid}`);
+            if (cachedRole) setRole(cachedRole as 'admin' | 'client');
+          } else {
+            handleFirestoreError(e, OperationType.GET, `users/${u.uid}`);
+          }
         }
       } else {
         setRole(null);
@@ -1819,7 +1862,13 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
       const prods = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() } as Product));
       if (prods.length > 0) {
         setProducts(prods);
-        localStorage.setItem('piti_products_cache', JSON.stringify(prods));
+        try {
+          localStorage.setItem('piti_products_cache', JSON.stringify(prods));
+        } catch (e) {
+          console.warn('LocalStorage full, clearing cache:', e);
+          localStorage.removeItem('piti_products_cache');
+          // If it still fails, we just don't cache
+        }
       } else if (snapshot.metadata.fromCache === false) {
         // Only set to empty if we are sure the server has no products
         setProducts([]);
@@ -1846,7 +1895,11 @@ export function FirebaseProvider({ children }: { children: React.ReactNode }) {
   // Sync guest cart to localStorage
   useEffect(() => {
     if (!user) {
-      localStorage.setItem('piti_cart', JSON.stringify(cart));
+      try {
+        localStorage.setItem('piti_cart', JSON.stringify(cart));
+      } catch (e) {
+        console.warn('LocalStorage full, could not save cart:', e);
+      }
     }
   }, [cart, user]);
 
@@ -2679,8 +2732,12 @@ const AdminView = () => {
       setLoading(false);
     }, (error) => {
       console.error('AdminView snapshot error:', error);
-      handleFirestoreError(error, OperationType.LIST, 'products');
       setLoading(false);
+      if (error.message.includes('Quota exceeded')) {
+        addToast('Không thể tải danh sách sản phẩm admin (hết hạn mức).', 'info');
+      } else {
+        handleFirestoreError(error, OperationType.LIST, 'products');
+      }
     });
 
     return () => unsubscribe();
@@ -3217,7 +3274,14 @@ const OrderManagementView = () => {
       const orderList = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
       setOrders(orderList);
       setLoading(false);
-    }, (error) => handleFirestoreError(error, OperationType.LIST, 'orders'));
+    }, (error) => {
+      setLoading(false);
+      if (error.message.includes('Quota exceeded')) {
+        addToast('Không thể tải danh sách đơn hàng (hết hạn mức).', 'info');
+      } else {
+        handleFirestoreError(error, OperationType.LIST, 'orders');
+      }
+    });
 
     return () => unsubscribe();
   }, []);
